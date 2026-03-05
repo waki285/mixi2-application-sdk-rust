@@ -1,0 +1,19 @@
+version: v2
+managed:
+  enabled: true
+  override:
+    - file_option: go_package_prefix
+      value: github.com/mixigroup/mixi2-application-sdk-go/gen/go
+plugins:
+  - remote: buf.build/protocolbuffers/go
+    out: gen/go
+    opt:
+      - paths=source_relative
+  - remote: buf.build/grpc/go
+    out: gen/go
+    opt:
+      - paths=source_relative
+inputs:
+  - git_repo: https://github.com/mixigroup/mixi2-api.git
+    subdir: proto
+    tag: v1.0.0
