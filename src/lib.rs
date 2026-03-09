@@ -1,7 +1,7 @@
 //! Async Rust SDK for the mixi2 Application API.
 //!
 //! This crate combines the complete SDK surface into a single package:
-//! - OAuth2 client-credentials authentication via [`ClientCredentialsAuthenticator`]
+//! - `OAuth2` client-credentials authentication via [`ClientCredentialsAuthenticator`]
 //! - Authenticated unary gRPC access via [`ApiClient`] and [`ApiClientBuilder`]
 //! - Webhook and streaming event helpers via [`WebhookService`], [`WebhookServer`], and
 //!   [`StreamClientBuilder`]
