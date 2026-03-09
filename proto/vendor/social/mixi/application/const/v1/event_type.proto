@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+package social.mixi.application.const.v1;
+
+// イベントの発生理由を示す列挙型
+enum EventReason {
+  // 未指定
+  EVENT_REASON_UNSPECIFIED = 0;
+  // 接続確認
+  EVENT_REASON_PING = 1;
+  // ポストに返信された
+  EVENT_REASON_POST_REPLY = 2;
+  // ポストでメンションされた
+  EVENT_REASON_POST_MENTIONED = 3;
+  // ポストが引用された
+  EVENT_REASON_POST_QUOTED = 4;
+  // チャット/ダイレクトメッセージを受信した
+  EVENT_REASON_DIRECT_MESSAGE_RECEIVED = 8;
+}
+
+// イベントの種別を示す列挙型
+enum EventType {
+  // 未指定
+  EVENT_TYPE_UNSPECIFIED = 0;
+  // 接続確認
+  EVENT_TYPE_PING = 1;
+  // ポスト作成
+  EVENT_TYPE_POST_CREATED = 2;
+  // メッセージ受信（チャット/ダイレクトメッセージ）
+  EVENT_TYPE_CHAT_MESSAGE_RECEIVED = 4;
+}

@@ -1,0 +1,96 @@
+[package]
+name = "mixi2"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+build = "build.rs"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[dependencies]
+async-trait = "0.1"
+axum = "0.8"
+base64 = "0.22"
+ed25519-dalek = "2"
+oauth2 = { version = "5", features = ["reqwest", "rustls-tls"] }
+prost = "0.14"
+prost-types = "0.14"
+rand = "0.10"
+thiserror = "2"
+tokio = { version = "1", default-features = false, features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
+tonic = "0.14"
+tonic-prost = "0.14"
+tracing = "0.1"
+
+[dev-dependencies]
+hex = "0.4"
+serde_json = "1"
+
+[build-dependencies]
+protoc-bin-vendored = "3"
+tonic-prost-build = "0.14"
+
+[lints.rust]
+unfulfilled_lint_expectations = "deny"
+
+[lints.clippy]
+absolute_paths = "deny"
+allow_attributes = "deny"
+as_pointer_underscore = "deny"
+as_underscore = "deny"
+assigning_clones = "deny"
+cfg_not_test = "deny"
+clone_on_ref_ptr = "deny"
+create_dir = "deny"
+dbg_macro = "deny"
+default_union_representation = "deny"
+disallowed_script_idents = "deny"
+empty_enum_variants_with_brackets = "deny"
+empty_structs_with_brackets = "deny"
+error_impl_error = "deny"
+filetype_is_file = "deny"
+fn_to_numeric_cast_any = "deny"
+indexing_slicing = "deny"
+infinite_loop = "deny"
+large_include_file = "deny"
+lossy_float_literal = "deny"
+map_err_ignore = "deny"
+mem_forget = "deny"
+missing_errors_doc = "warn"
+missing_panics_doc = "deny"
+mixed_read_write_in_expression = "deny"
+mutex_atomic = "deny"
+mutex_integer = "deny"
+non_zero_suggestions = "deny"
+nursery = { level = "deny", priority = -1 }
+panic_in_result_fn = "deny"
+path_buf_push_overwrite = "deny"
+pathbuf_init_then_push = "deny"
+pedantic = { level = "deny", priority = -1 }
+pointer_format = "deny"
+precedence_bits = "deny"
+rc_buffer = "deny"
+rc_mutex = "deny"
+redundant_closure_for_method_calls = "allow"
+redundant_feature_names = "deny"
+redundant_test_prefix = "deny"
+return_and_then = "deny"
+same_name_method = "deny"
+self_named_module_files = "deny"
+separated_literal_suffix = "deny"
+similar_names = "allow"
+string_lit_chars_any = "deny"
+string_slice = "deny"
+suspicious_xor_used_as_pow = "deny"
+tests_outside_test_module = "deny"
+try_err = "deny"
+undocumented_unsafe_blocks = "deny"
+uninlined_format_args = "allow"
+unnecessary_safety_comment = "deny"
+unnecessary_safety_doc = "deny"
+unnecessary_self_imports = "deny"
+unwrap_used = "deny"
+verbose_file_reads = "deny"
+wildcard_dependencies = "deny"
