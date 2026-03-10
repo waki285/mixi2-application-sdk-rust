@@ -27,17 +27,17 @@ use mixi2::{ApiClientBuilder, ClientCredentialsAuthenticator};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-let authenticator = Arc::new(
-    ClientCredentialsAuthenticator::new("client-id", "client-secret").await?,
-);
+  let authenticator = Arc::new(
+      ClientCredentialsAuthenticator::new("client-id", "client-secret").await?,
+  );
 
-let mut client = ApiClientBuilder::new(authenticator).build().await?;
+  let mut client = ApiClientBuilder::new(authenticator).build().await?;
 
-let _response = client
-    .get_stamps(mixi2::GetStampsRequestBuilder::new().build())
-    .await?;
+  let _response = client
+      .get_stamps(mixi2::GetStampsRequestBuilder::new().build())
+      .await?;
 
-Ok(())
+  Ok(())
 }
 ```
 
