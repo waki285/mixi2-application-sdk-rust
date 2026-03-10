@@ -1,22 +1,19 @@
-use std::{env, error::Error, sync::Arc};
+use std::{env, error::Error};
 
-use mixi2::{ApiClientBuilder, ClientCredentialsAuthenticator};
+use mixi2::{Authenticator, ClientCredentialsAuthenticator};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let authenticator = Arc::new(
-        ClientCredentialsAuthenticator::new(
-            env::var("MIXI2_CLIENT_ID")?,
-            env::var("MIXI2_CLIENT_SECRET")?,
-            env::var("MIXI2_TOKEN_URL")?,
-        )
-        .await?,
-    );
+    dotenvy::dotenv().ok();
 
-    let _client = ApiClientBuilder::new(authenticator)
-        .with_endpoint(env::var("MIXI2_API_ENDPOINT")?)
-        .build()
-        .await?;
+    let authenticator = ClientCredentialsAuthenticator::new(
+        env::var("MIXI2_CLIENT_ID")?,
+        env::var("MIXI2_CLIENT_SECRET")?,
+    )
+    .await?;
+    let access_token = authenticator.access_token().await?;
+
+    println!("{access_token}");
 
     Ok(())
 }

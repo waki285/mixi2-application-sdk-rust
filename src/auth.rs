@@ -15,6 +15,8 @@ use tokio::sync::Mutex;
 use tonic::metadata::{MetadataMap, MetadataValue, errors::InvalidMetadataValue};
 
 const EXPIRY_BUFFER: Duration = Duration::from_secs(60);
+/// Official mixi2 OAuth2 token endpoint for application SDK clients.
+pub const DEFAULT_TOKEN_URL: &str = "https://application-auth.mixi.social/oauth2/token";
 
 /// Errors returned by the mixi2 authentication layer.
 #[derive(Debug, thiserror::Error)]
@@ -58,19 +60,24 @@ pub struct AuthenticatorBuilder {
 
 impl AuthenticatorBuilder {
     /// Creates a new builder for the given `OAuth2` client credentials.
+    ///
+    /// The builder uses [`DEFAULT_TOKEN_URL`] unless [`Self::token_url`] overrides it.
     #[must_use]
-    pub fn new(
-        client_id: impl Into<String>,
-        client_secret: impl Into<String>,
-        token_url: impl Into<String>,
-    ) -> Self {
+    pub fn new(client_id: impl Into<String>, client_secret: impl Into<String>) -> Self {
         Self {
             auth_key: None,
             client_id: client_id.into(),
             client_secret: client_secret.into(),
             http_client: None,
-            token_url: token_url.into(),
+            token_url: String::from(DEFAULT_TOKEN_URL),
         }
+    }
+
+    /// Overrides the token endpoint used for client-credentials exchange.
+    #[must_use]
+    pub fn token_url(mut self, token_url: impl Into<String>) -> Self {
+        self.token_url = token_url.into();
+        self
     }
 
     /// Adds the optional `x-auth-key` metadata to authorized requests.
@@ -119,16 +126,17 @@ pub struct ClientCredentialsAuthenticator {
 
 impl ClientCredentialsAuthenticator {
     /// Creates a new builder for the given `OAuth2` client credentials.
+    ///
+    /// The builder uses [`DEFAULT_TOKEN_URL`] unless `.token_url(...)` overrides it.
     #[must_use]
     pub fn builder(
         client_id: impl Into<String>,
         client_secret: impl Into<String>,
-        token_url: impl Into<String>,
     ) -> AuthenticatorBuilder {
-        AuthenticatorBuilder::new(client_id, client_secret, token_url)
+        AuthenticatorBuilder::new(client_id, client_secret)
     }
 
-    /// Builds an authenticator and performs the initial token acquisition.
+    /// Builds an authenticator with [`DEFAULT_TOKEN_URL`] and performs the initial token acquisition.
     ///
     /// # Errors
     ///
@@ -137,11 +145,8 @@ impl ClientCredentialsAuthenticator {
     pub async fn new(
         client_id: impl Into<String>,
         client_secret: impl Into<String>,
-        token_url: impl Into<String>,
     ) -> Result<Self, AuthError> {
-        Self::builder(client_id, client_secret, token_url)
-            .build()
-            .await
+        Self::builder(client_id, client_secret).build().await
     }
 }
 
@@ -237,7 +242,9 @@ mod tests {
         time::Duration,
     };
 
-    use super::{Authenticator, AuthenticatorBuilder, ClientCredentialsAuthenticator};
+    use super::{
+        Authenticator, AuthenticatorBuilder, ClientCredentialsAuthenticator, DEFAULT_TOKEN_URL,
+    };
     use axum::{
         Json, Router,
         extract::State,
@@ -341,8 +348,16 @@ mod tests {
         }
     }
 
+    #[test]
+    fn builder_defaults_to_official_token_url() {
+        let builder = AuthenticatorBuilder::new("client-id", "client-secret");
+
+        assert_eq!(builder.token_url, DEFAULT_TOKEN_URL);
+    }
+
     async fn build_authenticator(server: &TestServer) -> ClientCredentialsAuthenticator {
-        match AuthenticatorBuilder::new("client-id", "client-secret", &server.token_url)
+        match AuthenticatorBuilder::new("client-id", "client-secret")
+            .token_url(&server.token_url)
             .build()
             .await
         {
@@ -355,9 +370,10 @@ mod tests {
     async fn new_authenticator_fetches_initial_token() {
         let server = spawn_token_server(vec![success_response("test-access-token", 3600)]).await;
 
-        let authenticator =
-            ClientCredentialsAuthenticator::new("client-id", "client-secret", &server.token_url)
-                .await;
+        let authenticator = ClientCredentialsAuthenticator::builder("client-id", "client-secret")
+            .token_url(&server.token_url)
+            .build()
+            .await;
 
         assert!(authenticator.is_ok());
         assert_eq!(server.call_count(), 1);
@@ -367,9 +383,10 @@ mod tests {
     async fn new_authenticator_returns_initial_error() {
         let server = spawn_token_server(vec![error_response()]).await;
 
-        let authenticator =
-            ClientCredentialsAuthenticator::new("client-id", "client-secret", &server.token_url)
-                .await;
+        let authenticator = ClientCredentialsAuthenticator::builder("client-id", "client-secret")
+            .token_url(&server.token_url)
+            .build()
+            .await;
 
         assert!(authenticator.is_err());
         assert_eq!(server.call_count(), 1);
@@ -406,15 +423,15 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn authorize_adds_optional_auth_key() {
         let server = spawn_token_server(vec![success_response("test-access-token", 3600)]).await;
-        let authenticator =
-            match AuthenticatorBuilder::new("client-id", "client-secret", &server.token_url)
-                .auth_key("test-auth-key")
-                .build()
-                .await
-            {
-                Ok(authenticator) => authenticator,
-                Err(error) => panic!("failed to build authenticator: {error}"),
-            };
+        let authenticator = match AuthenticatorBuilder::new("client-id", "client-secret")
+            .token_url(&server.token_url)
+            .auth_key("test-auth-key")
+            .build()
+            .await
+        {
+            Ok(authenticator) => authenticator,
+            Err(error) => panic!("failed to build authenticator: {error}"),
+        };
         let mut metadata = MetadataMap::new();
 
         let result = authenticator.authorize(&mut metadata).await;

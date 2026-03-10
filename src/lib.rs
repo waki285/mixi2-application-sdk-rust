@@ -16,25 +16,14 @@
 //! ```no_run
 //! use std::sync::Arc;
 //!
-//! use mixi2::{
-//!     ApiClientBuilder, ClientCredentialsAuthenticator, GetStampsRequestBuilder,
-//! };
+//! use mixi2::{ApiClientBuilder, ClientCredentialsAuthenticator, GetStampsRequestBuilder};
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     let authenticator = Arc::new(
-//!         ClientCredentialsAuthenticator::new(
-//!             "client-id",
-//!             "client-secret",
-//!             "https://mixi2.example.com/oauth/token",
-//!         )
-//!         .await?,
-//!     );
+//!     let authenticator =
+//!         Arc::new(ClientCredentialsAuthenticator::new("client-id", "client-secret").await?);
 //!
-//!     let mut client = ApiClientBuilder::new(authenticator)
-//!         .with_endpoint("https://mixi2.example.com")
-//!         .build()
-//!         .await?;
+//!     let mut client = ApiClientBuilder::new(authenticator).build().await?;
 //!
 //!     let _stamps = client
 //!         .get_stamps(GetStampsRequestBuilder::new().build())
@@ -92,8 +81,15 @@ use tonic::{
     transport::{Channel, Endpoint, Error as TransportError},
 };
 
+/// Official mixi2 Application API endpoint for SDK clients.
+///
+/// This endpoint is used automatically when builders are created without an
+/// explicit `with_endpoint` or `with_channel` transport override.
+pub const DEFAULT_API_ENDPOINT: &str = "https://application-api.mixi.social";
+
 pub use crate::auth::{
     AuthError, Authenticator, AuthenticatorBuilder, ClientCredentialsAuthenticator,
+    DEFAULT_TOKEN_URL,
 };
 pub use crate::events::{
     BoxError, DispatchMode, EventHandler, StreamWatcher, StreamWatcherError, WebhookError,
@@ -127,8 +123,6 @@ pub enum RequestValidationError {
 /// Transport setup errors returned by the top-level builders.
 #[derive(Debug, Error)]
 pub enum ClientBuildError {
-    #[error("no transport source was configured")]
-    MissingTransport,
     #[error("channel and endpoint are mutually exclusive")]
     ConflictingTransport,
     #[error("failed to configure transport endpoint")]
@@ -337,8 +331,8 @@ impl ApiClientBuilder {
     ///
     /// # Errors
     ///
-    /// Returns an error when no transport was configured, when both channel and endpoint
-    /// were configured, or when endpoint connection setup fails.
+    /// Returns an error when both channel and endpoint were configured, or when
+    /// endpoint connection setup fails.
     pub async fn build(self) -> Result<ApiClient<Channel>, ClientBuildError> {
         let channel = resolve_channel(self.channel, self.endpoint).await?;
         let raw_client = RawApiClient::new(channel);
@@ -382,8 +376,8 @@ impl StreamClientBuilder {
     ///
     /// # Errors
     ///
-    /// Returns an error when no transport was configured, when both channel and endpoint
-    /// were configured, or when endpoint connection setup fails.
+    /// Returns an error when both channel and endpoint were configured, or when
+    /// endpoint connection setup fails.
     pub async fn build(
         self,
     ) -> Result<EventStreamWatcher<RawStreamClient<Channel>>, ClientBuildError> {
@@ -669,16 +663,20 @@ async fn resolve_channel(
 ) -> Result<Channel, ClientBuildError> {
     match (channel, endpoint) {
         (Some(_), Some(_)) => Err(ClientBuildError::ConflictingTransport),
-        (None, None) => Err(ClientBuildError::MissingTransport),
         (Some(channel), None) => Ok(channel),
-        (None, Some(endpoint)) => {
-            let endpoint = Endpoint::new(endpoint).map_err(ClientBuildError::Transport)?;
+        (None, endpoint) => {
+            let endpoint =
+                Endpoint::new(resolve_endpoint(endpoint)).map_err(ClientBuildError::Transport)?;
             endpoint
                 .connect()
                 .await
                 .map_err(ClientBuildError::Transport)
         }
     }
+}
+
+fn resolve_endpoint(endpoint: Option<String>) -> String {
+    endpoint.unwrap_or_else(|| DEFAULT_API_ENDPOINT.to_owned())
 }
 
 #[cfg(test)]
@@ -690,10 +688,25 @@ mod tests {
     };
 
     use super::{
-        AddStampToPostRequestBuilder, CreatePostRequestBuilder, GetStampsRequestBuilder,
-        InitiatePostMediaUploadRequestBuilder, RequestValidationError,
-        SendChatMessageRequestBuilder,
+        AddStampToPostRequestBuilder, CreatePostRequestBuilder, DEFAULT_API_ENDPOINT,
+        GetStampsRequestBuilder, InitiatePostMediaUploadRequestBuilder, RequestValidationError,
+        SendChatMessageRequestBuilder, resolve_endpoint,
     };
+
+    #[test]
+    fn resolve_endpoint_defaults_to_official_api_endpoint() {
+        assert_eq!(resolve_endpoint(None), DEFAULT_API_ENDPOINT);
+    }
+
+    #[test]
+    fn resolve_endpoint_prefers_explicit_override() {
+        let override_endpoint = String::from("https://override.example.test");
+
+        assert_eq!(
+            resolve_endpoint(Some(override_endpoint.clone())),
+            override_endpoint
+        );
+    }
 
     #[test]
     fn create_post_builder_rejects_conflicting_targets() {

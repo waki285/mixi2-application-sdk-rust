@@ -19,6 +19,8 @@ impl EventHandler for PrintHandler {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    dotenvy::dotenv().ok();
+
     let public_key_hex = env::var("MIXI2_WEBHOOK_PUBLIC_KEY")?;
     let public_key_bytes = hex::decode(public_key_hex)?;
     let public_key = VerifyingKey::from_bytes(public_key_bytes.as_slice().try_into()?)?;
