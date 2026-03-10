@@ -28,17 +28,28 @@ use axum::{
     Router,
     body::Bytes,
     extract::State,
-    http::{HeaderMap, StatusCode},
+    http::{
+        HeaderMap, HeaderValue, Method, Request as HttpRequest, StatusCode, Uri,
+        header::{CONTENT_TYPE, TE},
+    },
     response::{IntoResponse, Response},
     routing::{get, post},
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use bytes::{Bytes as GrpcBytes, BytesMut};
 use ed25519_dalek::{Signature, SignatureError, Verifier, VerifyingKey};
+use http_body_util::{BodyExt, Full};
+use hyper::body::Incoming;
+use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
+use hyper_util::{
+    client::legacy::{Client as HttpClient, connect::HttpConnector},
+    rt::TokioExecutor,
+};
 use prost::Message;
 use thiserror::Error;
 use tokio::{net::TcpListener, time::sleep};
 use tonic::{
-    Request, Response as TonicResponse, Status,
+    Code, Request, Status,
     body::Body as TransportBody,
     client::GrpcService,
     codec::Streaming,
@@ -49,6 +60,14 @@ use tracing::{debug, error, info, warn};
 const EVENTS_PATH: &str = "/events";
 const HEALTH_PATH: &str = "/healthz";
 const MAX_RECONNECT_ATTEMPTS: u8 = 3;
+// mixi2 stream responses can exceed the default 16 KiB HTTP/2 frame size that tonic advertises.
+const HTTP2_MAX_FRAME_SIZE: u32 = (1 << 24) - 1;
+const GRPC_FRAME_HEADER_LEN: usize = 5;
+const GRPC_ACCEPT_ENCODING_HEADER: &str = "grpc-accept-encoding";
+const GRPC_ACCEPT_ENCODING_VALUE: &str = "identity";
+const GRPC_CONTENT_TYPE: &str = "application/grpc";
+const STREAM_SUBSCRIBE_PATH: &str =
+    "/social.mixi.application.service.application_stream.v1.ApplicationService/SubscribeEvents";
 const TIMESTAMP_TOLERANCE_SECS: i64 = 300;
 
 /// Boxed error type returned by event handlers.
@@ -312,14 +331,11 @@ where
 /// Client abstraction used by the stream watcher.
 #[async_trait]
 pub trait SubscribeEventsClient: Send {
-    /// Stream type returned by `subscribe_events`.
-    type Stream: SubscribeEventsStream + Send;
-
     /// Starts the event subscription RPC.
     async fn subscribe_events(
         &mut self,
         request: Request<SubscribeEventsRequest>,
-    ) -> Result<TonicResponse<Self::Stream>, Status>;
+    ) -> Result<Box<dyn SubscribeEventsStream + Send>, Status>;
 }
 
 /// Async receive abstraction for stream testing.
@@ -345,32 +361,182 @@ where
     T::ResponseBody: Body<Data = TonicBytes> + Send + 'static,
     <T::ResponseBody as Body>::Error: Into<StdError> + Send,
 {
-    type Stream = Streaming<SubscribeEventsResponse>;
-
     async fn subscribe_events(
         &mut self,
         request: Request<SubscribeEventsRequest>,
-    ) -> Result<TonicResponse<Self::Stream>, Status> {
-        Self::subscribe_events(self, request).await
+    ) -> Result<Box<dyn SubscribeEventsStream + Send>, Status> {
+        let response = Self::subscribe_events(self, request).await?;
+        Ok(Box::new(response.into_inner()))
+    }
+}
+
+type HttpStreamTransport = HttpClient<HttpsConnector<HttpConnector>, Full<GrpcBytes>>;
+
+pub(crate) struct HttpStreamClient {
+    client: HttpStreamTransport,
+    endpoint: Uri,
+}
+
+impl HttpStreamClient {
+    fn new(endpoint: Uri) -> Self {
+        let https = HttpsConnectorBuilder::new()
+            .with_webpki_roots()
+            .https_or_http()
+            .enable_http2()
+            .build();
+        let mut builder = HttpClient::builder(TokioExecutor::new());
+        builder.http2_only(true);
+        builder.http2_max_frame_size(HTTP2_MAX_FRAME_SIZE);
+
+        Self {
+            client: builder.build(https),
+            endpoint,
+        }
+    }
+
+    fn subscribe_uri(&self) -> Result<Uri, Status> {
+        let mut parts = self.endpoint.clone().into_parts();
+        let base_path = parts
+            .path_and_query
+            .as_ref()
+            .map_or("", |path_and_query| path_and_query.path());
+        let path = if base_path.is_empty() || base_path == "/" {
+            STREAM_SUBSCRIBE_PATH.to_owned()
+        } else {
+            format!(
+                "{}{}",
+                base_path.trim_end_matches('/'),
+                STREAM_SUBSCRIBE_PATH
+            )
+        };
+        let path_and_query = path.parse().map_err(|error| {
+            Status::internal(format!("failed to build subscribe path: {error}"))
+        })?;
+        parts.path_and_query = Some(path_and_query);
+
+        Uri::from_parts(parts)
+            .map_err(|error| Status::internal(format!("failed to build subscribe uri: {error}")))
+    }
+}
+
+pub(crate) fn http_stream_client(endpoint: Uri) -> HttpStreamClient {
+    HttpStreamClient::new(endpoint)
+}
+
+#[async_trait]
+impl SubscribeEventsClient for HttpStreamClient {
+    async fn subscribe_events(
+        &mut self,
+        request: Request<SubscribeEventsRequest>,
+    ) -> Result<Box<dyn SubscribeEventsStream + Send>, Status> {
+        let uri = self.subscribe_uri()?;
+        let (metadata, _extensions, message) = request.into_parts();
+        let body = encode_grpc_request(&message)?;
+        let mut request = HttpRequest::builder()
+            .method(Method::POST)
+            .uri(uri)
+            .body(Full::new(GrpcBytes::from(body)))
+            .map_err(|error| {
+                Status::internal(format!("failed to build subscribe request: {error}"))
+            })?;
+        request
+            .headers_mut()
+            .extend(metadata.into_headers().into_iter());
+        request
+            .headers_mut()
+            .insert(CONTENT_TYPE, HeaderValue::from_static(GRPC_CONTENT_TYPE));
+        request
+            .headers_mut()
+            .insert(TE, HeaderValue::from_static("trailers"));
+        request.headers_mut().insert(
+            GRPC_ACCEPT_ENCODING_HEADER,
+            HeaderValue::from_static(GRPC_ACCEPT_ENCODING_VALUE),
+        );
+
+        let response = self.client.request(request).await.map_err(|error| {
+            Status::unknown(format!("stream transport request failed: {error}"))
+        })?;
+
+        if response.status() != StatusCode::OK {
+            if let Some(status) = Status::from_header_map(response.headers()) {
+                return Err(status);
+            }
+            return Err(map_http_status_without_grpc_status(response.status()));
+        }
+
+        validate_grpc_status(response.headers())?;
+
+        Ok(Box::new(HttpGrpcStream {
+            body: response.into_body(),
+            pending: BytesMut::new(),
+        }))
+    }
+}
+
+struct HttpGrpcStream {
+    body: Incoming,
+    pending: BytesMut,
+}
+
+#[async_trait]
+impl SubscribeEventsStream for HttpGrpcStream {
+    async fn recv(&mut self) -> Result<Option<SubscribeEventsResponse>, Status> {
+        loop {
+            if let Some(message) = decode_grpc_response(&mut self.pending)? {
+                return Ok(Some(message));
+            }
+
+            match self.body.frame().await {
+                Some(Ok(frame)) => {
+                    let frame = match frame.into_data() {
+                        Ok(data) => {
+                            self.pending.extend_from_slice(data.as_ref());
+                            continue;
+                        }
+                        Err(frame) => frame,
+                    };
+
+                    let trailers = frame.into_trailers().map_err(|_| {
+                        Status::unknown("received an unexpected non-data HTTP/2 frame")
+                    })?;
+                    validate_grpc_status(&trailers)?;
+                    return Ok(None);
+                }
+                Some(Err(error)) => {
+                    return Err(Status::unknown(format!(
+                        "stream response body failed: {error}"
+                    )));
+                }
+                None => {
+                    if self.pending.is_empty() {
+                        return Ok(None);
+                    }
+
+                    return Err(Status::unknown(
+                        "stream ended with an incomplete gRPC message",
+                    ));
+                }
+            }
+        }
     }
 }
 
 /// Watches the gRPC event stream and dispatches events to the provided handler.
-pub struct StreamWatcher<C> {
+pub struct StreamWatcher {
     authenticator: Arc<dyn Authenticator>,
-    client: C,
+    client: Box<dyn SubscribeEventsClient>,
 }
 
-impl<C> StreamWatcher<C>
-where
-    C: SubscribeEventsClient,
-{
+impl StreamWatcher {
     /// Creates a new stream watcher for the given client and authenticator.
     #[must_use]
-    pub fn new(client: C, authenticator: Arc<dyn Authenticator>) -> Self {
+    pub fn new(
+        client: impl SubscribeEventsClient + 'static,
+        authenticator: Arc<dyn Authenticator>,
+    ) -> Self {
         Self {
             authenticator,
-            client,
+            client: Box::new(client),
         }
     }
 
@@ -412,18 +578,20 @@ where
         }
     }
 
-    async fn connect(&mut self) -> Result<C::Stream, StreamWatcherError> {
+    async fn connect(
+        &mut self,
+    ) -> Result<Box<dyn SubscribeEventsStream + Send>, StreamWatcherError> {
         let mut request = Request::new(SubscribeEventsRequest {});
         self.authenticator.authorize(request.metadata_mut()).await?;
-        let response = self
-            .client
+        self.client
             .subscribe_events(request)
             .await
-            .map_err(StreamWatcherError::Subscribe)?;
-        Ok(response.into_inner())
+            .map_err(StreamWatcherError::Subscribe)
     }
 
-    async fn reconnect(&mut self) -> Result<C::Stream, StreamWatcherError> {
+    async fn reconnect(
+        &mut self,
+    ) -> Result<Box<dyn SubscribeEventsStream + Send>, StreamWatcherError> {
         let mut last_error = None;
 
         for attempt in 0..MAX_RECONNECT_ATTEMPTS {
@@ -462,6 +630,80 @@ where
             ))),
         }
     }
+}
+
+fn encode_grpc_request(request: &SubscribeEventsRequest) -> Result<Vec<u8>, Status> {
+    let message = request.encode_to_vec();
+    let message_len = u32::try_from(message.len())
+        .map_err(|error| Status::internal(format!("request body is too large: {error}")))?;
+    let mut body = Vec::with_capacity(GRPC_FRAME_HEADER_LEN + message.len());
+    body.push(0);
+    body.extend_from_slice(&message_len.to_be_bytes());
+    body.extend_from_slice(&message);
+    Ok(body)
+}
+
+fn decode_grpc_response(pending: &mut BytesMut) -> Result<Option<SubscribeEventsResponse>, Status> {
+    if pending.len() < GRPC_FRAME_HEADER_LEN {
+        return Ok(None);
+    }
+
+    if pending[0] != 0 {
+        return Err(Status::unimplemented(
+            "compressed gRPC stream messages are not supported",
+        ));
+    }
+
+    let message_len = usize::try_from(u32::from_be_bytes([
+        pending[1], pending[2], pending[3], pending[4],
+    ]))
+    .map_err(|error| Status::internal(format!("failed to parse gRPC frame length: {error}")))?;
+    let frame_len = GRPC_FRAME_HEADER_LEN
+        .checked_add(message_len)
+        .ok_or_else(|| Status::internal("gRPC frame length overflowed usize"))?;
+
+    if pending.len() < frame_len {
+        return Ok(None);
+    }
+
+    let frame = pending.split_to(frame_len);
+    let message =
+        SubscribeEventsResponse::decode(&frame[GRPC_FRAME_HEADER_LEN..]).map_err(|error| {
+            Status::internal(format!("failed to decode subscribe response: {error}"))
+        })?;
+    Ok(Some(message))
+}
+
+fn validate_grpc_status(headers: &HeaderMap) -> Result<(), Status> {
+    if let Some(status) = Status::from_header_map(headers)
+        && status.code() != Code::Ok
+    {
+        return Err(status);
+    }
+
+    Ok(())
+}
+
+fn map_http_status_without_grpc_status(status_code: StatusCode) -> Status {
+    let code = match status_code {
+        StatusCode::BAD_REQUEST => Code::Internal,
+        StatusCode::UNAUTHORIZED => Code::Unauthenticated,
+        StatusCode::FORBIDDEN => Code::PermissionDenied,
+        StatusCode::NOT_FOUND => Code::Unimplemented,
+        StatusCode::TOO_MANY_REQUESTS
+        | StatusCode::BAD_GATEWAY
+        | StatusCode::SERVICE_UNAVAILABLE
+        | StatusCode::GATEWAY_TIMEOUT => Code::Unavailable,
+        _ => Code::Unknown,
+    };
+
+    Status::new(
+        code,
+        format!(
+            "grpc-status header missing, mapped from HTTP status code {}",
+            status_code.as_u16()
+        ),
+    )
 }
 
 /// Test helpers that mirror the Go SDK fixtures.
@@ -599,6 +841,7 @@ mod tests {
         body::Bytes,
         http::{HeaderMap, StatusCode},
     };
+    use bytes::BytesMut;
     use ed25519_dalek::SigningKey;
     use prost::Message;
     use tokio::{
@@ -613,7 +856,7 @@ mod tests {
     use super::{
         AuthError, Authenticator, BoxError, Clock, DispatchMode, EventHandler,
         MAX_RECONNECT_ATTEMPTS, StreamWatcher, SubscribeEventsClient, SubscribeEventsRequest,
-        SubscribeEventsStream, TonicResponse, WebhookService, testutil,
+        SubscribeEventsStream, WebhookService, decode_grpc_response, testutil,
     };
 
     #[derive(Debug)]
@@ -685,15 +928,13 @@ mod tests {
 
     #[async_trait]
     impl SubscribeEventsClient for FakeStreamClient {
-        type Stream = FakeStream;
-
         async fn subscribe_events(
             &mut self,
             _request: Request<SubscribeEventsRequest>,
-        ) -> Result<TonicResponse<Self::Stream>, Status> {
+        ) -> Result<Box<dyn SubscribeEventsStream + Send>, Status> {
             self.call_count.fetch_add(1, Ordering::SeqCst);
             match self.streams.pop_front() {
-                Some(Ok(stream)) => Ok(TonicResponse::new(stream)),
+                Some(Ok(stream)) => Ok(Box::new(stream)),
                 Some(Err(error)) => Err(error),
                 None => Err(Status::unknown("no stream configured")),
             }
@@ -1005,5 +1246,48 @@ mod tests {
     #[test]
     fn stream_watcher_reconnect_budget_matches_go_sdk() {
         assert_eq!(MAX_RECONNECT_ATTEMPTS, 3);
+    }
+
+    #[test]
+    fn grpc_decoder_waits_for_complete_frame() {
+        let response = SubscribeEventsResponse {
+            events: vec![event_with_type(EventType::Unspecified)],
+        };
+        let payload = response.encode_to_vec();
+        let payload_len = match u32::try_from(payload.len()) {
+            Ok(payload_len) => payload_len,
+            Err(error) => panic!("payload length did not fit into u32: {error}"),
+        };
+
+        let mut frame = Vec::with_capacity(5 + payload.len());
+        frame.push(0);
+        frame.extend_from_slice(&payload_len.to_be_bytes());
+        frame.extend_from_slice(&payload);
+
+        let mut pending = BytesMut::new();
+        pending.extend_from_slice(&frame[..4]);
+        assert!(matches!(decode_grpc_response(&mut pending), Ok(None)));
+
+        pending.extend_from_slice(&frame[4..]);
+        let decoded = decode_grpc_response(&mut pending);
+
+        assert!(matches!(
+            decoded,
+            Ok(Some(SubscribeEventsResponse { events, .. }))
+                if events.len() == 1
+                    && events[0].event_type == EventType::Unspecified as i32
+        ));
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn grpc_decoder_rejects_compressed_frames() {
+        let mut pending = BytesMut::from(&[1, 0, 0, 0, 0][..]);
+        let result = decode_grpc_response(&mut pending);
+
+        assert!(matches!(
+            result,
+            Err(status) if status.code() == tonic::Code::Unimplemented
+        ));
     }
 }

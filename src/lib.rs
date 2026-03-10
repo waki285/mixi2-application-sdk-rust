@@ -81,11 +81,17 @@ use tonic::{
     transport::{Channel, Endpoint, Error as TransportError},
 };
 
-/// Official mixi2 Application API endpoint for SDK clients.
+/// Official mixi2 Application API endpoint for unary SDK clients.
 ///
 /// This endpoint is used automatically when builders are created without an
 /// explicit `with_endpoint` or `with_channel` transport override.
 pub const DEFAULT_API_ENDPOINT: &str = "https://application-api.mixi.social";
+
+/// Official mixi2 Application stream endpoint for event streaming clients.
+///
+/// This endpoint is used automatically when stream builders are created without
+/// an explicit `with_endpoint` or `with_channel` transport override.
+pub const DEFAULT_STREAM_ENDPOINT: &str = "https://application-stream.mixi.social";
 
 pub use crate::auth::{
     AuthError, Authenticator, AuthenticatorBuilder, ClientCredentialsAuthenticator,
@@ -334,7 +340,7 @@ impl ApiClientBuilder {
     /// Returns an error when both channel and endpoint were configured, or when
     /// endpoint connection setup fails.
     pub async fn build(self) -> Result<ApiClient<Channel>, ClientBuildError> {
-        let channel = resolve_channel(self.channel, self.endpoint).await?;
+        let channel = resolve_channel(self.channel, self.endpoint, DEFAULT_API_ENDPOINT).await?;
         let raw_client = RawApiClient::new(channel);
         Ok(ApiClient::new(raw_client, self.authenticator))
     }
@@ -378,12 +384,20 @@ impl StreamClientBuilder {
     ///
     /// Returns an error when both channel and endpoint were configured, or when
     /// endpoint connection setup fails.
-    pub async fn build(
-        self,
-    ) -> Result<EventStreamWatcher<RawStreamClient<Channel>>, ClientBuildError> {
-        let channel = resolve_channel(self.channel, self.endpoint).await?;
-        let raw_client = RawStreamClient::new(channel);
-        Ok(EventStreamWatcher::new(raw_client, self.authenticator))
+    pub async fn build(self) -> Result<EventStreamWatcher, ClientBuildError> {
+        match (self.channel, self.endpoint) {
+            (Some(_), Some(_)) => Err(ClientBuildError::ConflictingTransport),
+            (Some(channel), None) => {
+                let raw_client = RawStreamClient::new(channel);
+                Ok(EventStreamWatcher::new(raw_client, self.authenticator))
+            }
+            (None, endpoint) => {
+                let endpoint = Endpoint::new(resolve_endpoint(endpoint, DEFAULT_STREAM_ENDPOINT))
+                    .map_err(ClientBuildError::Transport)?;
+                let raw_client = events::http_stream_client(endpoint.uri().clone());
+                Ok(EventStreamWatcher::new(raw_client, self.authenticator))
+            }
+        }
     }
 }
 
@@ -660,13 +674,14 @@ fn auth_error_to_status(error: &AuthLayerError) -> Status {
 async fn resolve_channel(
     channel: Option<Channel>,
     endpoint: Option<String>,
+    default_endpoint: &str,
 ) -> Result<Channel, ClientBuildError> {
     match (channel, endpoint) {
         (Some(_), Some(_)) => Err(ClientBuildError::ConflictingTransport),
         (Some(channel), None) => Ok(channel),
         (None, endpoint) => {
-            let endpoint =
-                Endpoint::new(resolve_endpoint(endpoint)).map_err(ClientBuildError::Transport)?;
+            let endpoint = Endpoint::new(resolve_endpoint(endpoint, default_endpoint))
+                .map_err(ClientBuildError::Transport)?;
             endpoint
                 .connect()
                 .await
@@ -675,8 +690,8 @@ async fn resolve_channel(
     }
 }
 
-fn resolve_endpoint(endpoint: Option<String>) -> String {
-    endpoint.unwrap_or_else(|| DEFAULT_API_ENDPOINT.to_owned())
+fn resolve_endpoint(endpoint: Option<String>, default_endpoint: &str) -> String {
+    endpoint.unwrap_or_else(|| default_endpoint.to_owned())
 }
 
 #[cfg(test)]
@@ -689,13 +704,24 @@ mod tests {
 
     use super::{
         AddStampToPostRequestBuilder, CreatePostRequestBuilder, DEFAULT_API_ENDPOINT,
-        GetStampsRequestBuilder, InitiatePostMediaUploadRequestBuilder, RequestValidationError,
-        SendChatMessageRequestBuilder, resolve_endpoint,
+        DEFAULT_STREAM_ENDPOINT, GetStampsRequestBuilder, InitiatePostMediaUploadRequestBuilder,
+        RequestValidationError, SendChatMessageRequestBuilder, resolve_endpoint,
     };
 
     #[test]
     fn resolve_endpoint_defaults_to_official_api_endpoint() {
-        assert_eq!(resolve_endpoint(None), DEFAULT_API_ENDPOINT);
+        assert_eq!(
+            resolve_endpoint(None, DEFAULT_API_ENDPOINT),
+            DEFAULT_API_ENDPOINT
+        );
+    }
+
+    #[test]
+    fn resolve_endpoint_defaults_to_official_stream_endpoint() {
+        assert_eq!(
+            resolve_endpoint(None, DEFAULT_STREAM_ENDPOINT),
+            DEFAULT_STREAM_ENDPOINT
+        );
     }
 
     #[test]
@@ -703,7 +729,7 @@ mod tests {
         let override_endpoint = String::from("https://override.example.test");
 
         assert_eq!(
-            resolve_endpoint(Some(override_endpoint.clone())),
+            resolve_endpoint(Some(override_endpoint.clone()), DEFAULT_API_ENDPOINT),
             override_endpoint
         );
     }
