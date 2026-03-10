@@ -46,7 +46,7 @@
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
-use std::sync::Arc;
+use std::{future::ready, sync::Arc};
 
 mod auth;
 mod events;
@@ -385,7 +385,7 @@ impl StreamClientBuilder {
     /// Returns an error when both channel and endpoint were configured, or when
     /// endpoint connection setup fails.
     pub async fn build(self) -> Result<EventStreamWatcher, ClientBuildError> {
-        match (self.channel, self.endpoint) {
+        let watcher = match (self.channel, self.endpoint) {
             (Some(_), Some(_)) => Err(ClientBuildError::ConflictingTransport),
             (Some(channel), None) => {
                 let raw_client = RawStreamClient::new(channel);
@@ -397,7 +397,9 @@ impl StreamClientBuilder {
                 let raw_client = events::http_stream_client(endpoint.uri().clone());
                 Ok(EventStreamWatcher::new(raw_client, self.authenticator))
             }
-        }
+        };
+
+        ready(watcher).await
     }
 }
 

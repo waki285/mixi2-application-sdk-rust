@@ -62,7 +62,7 @@ fn parse_public_key(value: &str) -> Result<VerifyingKey, Box<dyn Error>> {
             format!("MIXI2_WEBHOOK_PUBLIC_KEY must be base64: {error}"),
         )
     })?;
-    let bytes: [u8; 32] = bytes.as_slice().try_into().map_err(|_| {
+    let bytes: [u8; 32] = bytes.as_slice().try_into().map_err(|_slice| {
         IoError::new(
             ErrorKind::InvalidInput,
             "MIXI2_WEBHOOK_PUBLIC_KEY must decode to a 32-byte Ed25519 public key",
@@ -139,17 +139,17 @@ async fn webhook_handler(
 }
 
 fn event_type_label(event_type: i32) -> String {
-    match EventType::try_from(event_type) {
-        Ok(event_type) => format!("{event_type:?}({})", event_type as i32),
-        Err(_) => format!("Unknown({event_type})"),
-    }
+    EventType::try_from(event_type).map_or_else(
+        |_error| format!("Unknown({event_type})"),
+        |event_type| format!("{event_type:?}({})", event_type as i32),
+    )
 }
 
 fn header_value(headers: &HeaderMap, name: &str) -> String {
     headers
         .get(name)
         .and_then(|value| value.to_str().ok())
-        .map_or(String::from("unavailable"), ToOwned::to_owned)
+        .map_or_else(|| String::from("unavailable"), ToOwned::to_owned)
 }
 
 #[tokio::main]

@@ -15,7 +15,7 @@ use tokio::sync::Mutex;
 use tonic::metadata::{MetadataMap, MetadataValue, errors::InvalidMetadataValue};
 
 const EXPIRY_BUFFER: Duration = Duration::from_secs(60);
-/// Official mixi2 OAuth2 token endpoint for application SDK clients.
+/// Official mixi2 `OAuth2` token endpoint for application SDK clients.
 pub const DEFAULT_TOKEN_URL: &str = "https://application-auth.mixi.social/oauth2/token";
 
 /// Errors returned by the mixi2 authentication layer.

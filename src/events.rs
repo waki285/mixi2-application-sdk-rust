@@ -372,7 +372,7 @@ where
 
 type HttpStreamTransport = HttpClient<HttpsConnector<HttpConnector>, Full<GrpcBytes>>;
 
-pub(crate) struct HttpStreamClient {
+pub struct HttpStreamClient {
     client: HttpStreamTransport,
     endpoint: Uri,
 }
@@ -419,7 +419,7 @@ impl HttpStreamClient {
     }
 }
 
-pub(crate) fn http_stream_client(endpoint: Uri) -> HttpStreamClient {
+pub fn http_stream_client(endpoint: Uri) -> HttpStreamClient {
     HttpStreamClient::new(endpoint)
 }
 
@@ -431,7 +431,7 @@ impl SubscribeEventsClient for HttpStreamClient {
     ) -> Result<Box<dyn SubscribeEventsStream + Send>, Status> {
         let uri = self.subscribe_uri()?;
         let (metadata, _extensions, message) = request.into_parts();
-        let body = encode_grpc_request(&message)?;
+        let body = encode_grpc_request(message)?;
         let mut request = HttpRequest::builder()
             .method(Method::POST)
             .uri(uri)
@@ -439,9 +439,7 @@ impl SubscribeEventsClient for HttpStreamClient {
             .map_err(|error| {
                 Status::internal(format!("failed to build subscribe request: {error}"))
             })?;
-        request
-            .headers_mut()
-            .extend(metadata.into_headers().into_iter());
+        request.headers_mut().extend(metadata.into_headers());
         request
             .headers_mut()
             .insert(CONTENT_TYPE, HeaderValue::from_static(GRPC_CONTENT_TYPE));
@@ -496,7 +494,7 @@ impl SubscribeEventsStream for HttpGrpcStream {
                         Err(frame) => frame,
                     };
 
-                    let trailers = frame.into_trailers().map_err(|_| {
+                    let trailers = frame.into_trailers().map_err(|_frame| {
                         Status::unknown("received an unexpected non-data HTTP/2 frame")
                     })?;
                     validate_grpc_status(&trailers)?;
@@ -632,7 +630,7 @@ impl StreamWatcher {
     }
 }
 
-fn encode_grpc_request(request: &SubscribeEventsRequest) -> Result<Vec<u8>, Status> {
+fn encode_grpc_request(request: SubscribeEventsRequest) -> Result<Vec<u8>, Status> {
     let message = request.encode_to_vec();
     let message_len = u32::try_from(message.len())
         .map_err(|error| Status::internal(format!("request body is too large: {error}")))?;
@@ -648,16 +646,20 @@ fn decode_grpc_response(pending: &mut BytesMut) -> Result<Option<SubscribeEvents
         return Ok(None);
     }
 
-    if pending[0] != 0 {
+    let header = pending
+        .get(..GRPC_FRAME_HEADER_LEN)
+        .and_then(|bytes| <&[u8; GRPC_FRAME_HEADER_LEN]>::try_from(bytes).ok())
+        .ok_or_else(|| Status::internal("gRPC frame header truncated after length validation"))?;
+    let &[compression_flag, len0, len1, len2, len3] = header;
+
+    if compression_flag != 0 {
         return Err(Status::unimplemented(
             "compressed gRPC stream messages are not supported",
         ));
     }
 
-    let message_len = usize::try_from(u32::from_be_bytes([
-        pending[1], pending[2], pending[3], pending[4],
-    ]))
-    .map_err(|error| Status::internal(format!("failed to parse gRPC frame length: {error}")))?;
+    let message_len = usize::try_from(u32::from_be_bytes([len0, len1, len2, len3]))
+        .map_err(|error| Status::internal(format!("failed to parse gRPC frame length: {error}")))?;
     let frame_len = GRPC_FRAME_HEADER_LEN
         .checked_add(message_len)
         .ok_or_else(|| Status::internal("gRPC frame length overflowed usize"))?;
@@ -667,9 +669,13 @@ fn decode_grpc_response(pending: &mut BytesMut) -> Result<Option<SubscribeEvents
     }
 
     let frame = pending.split_to(frame_len);
-    let message =
-        SubscribeEventsResponse::decode(&frame[GRPC_FRAME_HEADER_LEN..]).map_err(|error| {
-            Status::internal(format!("failed to decode subscribe response: {error}"))
+    let message = frame
+        .get(GRPC_FRAME_HEADER_LEN..)
+        .ok_or_else(|| Status::internal("gRPC frame truncated after length validation"))
+        .and_then(|body| {
+            SubscribeEventsResponse::decode(body).map_err(|error| {
+                Status::internal(format!("failed to decode subscribe response: {error}"))
+            })
         })?;
     Ok(Some(message))
 }
@@ -1265,17 +1271,20 @@ mod tests {
         frame.extend_from_slice(&payload);
 
         let mut pending = BytesMut::new();
-        pending.extend_from_slice(&frame[..4]);
+        let (partial_header, payload_frame) = frame.split_at(4);
+        pending.extend_from_slice(partial_header);
         assert!(matches!(decode_grpc_response(&mut pending), Ok(None)));
 
-        pending.extend_from_slice(&frame[4..]);
+        pending.extend_from_slice(payload_frame);
         let decoded = decode_grpc_response(&mut pending);
 
         assert!(matches!(
             decoded,
             Ok(Some(SubscribeEventsResponse { events, .. }))
                 if events.len() == 1
-                    && events[0].event_type == EventType::Unspecified as i32
+                    && events
+                        .first()
+                        .is_some_and(|event| event.event_type == EventType::Unspecified as i32)
         ));
         assert!(pending.is_empty());
     }
