@@ -1,26 +1,34 @@
 //! Authentication support for the mixi2 Rust SDK.
 
-use std::{
-    error::Error,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::error::Error;
 
 use async_trait::async_trait;
+#[cfg(feature = "client-credentials-auth")]
 use oauth2::{
     ClientId, ClientSecret, TokenResponse, TokenUrl, basic::BasicClient,
     reqwest::Client as HttpClient, url::ParseError,
 };
+#[cfg(feature = "client-credentials-auth")]
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
+#[cfg(feature = "client-credentials-auth")]
 use tokio::sync::Mutex;
-use tonic::metadata::{MetadataMap, MetadataValue, errors::InvalidMetadataValue};
+#[cfg(feature = "client-credentials-auth")]
+use tonic::metadata::MetadataValue;
+use tonic::metadata::{MetadataMap, errors::InvalidMetadataValue};
 
+#[cfg(feature = "client-credentials-auth")]
 const EXPIRY_BUFFER: Duration = Duration::from_secs(60);
+#[cfg(feature = "client-credentials-auth")]
 /// Official mixi2 `OAuth2` token endpoint for application SDK clients.
 pub const DEFAULT_TOKEN_URL: &str = "https://application-auth.mixi.social/oauth2/token";
 
 /// Errors returned by the mixi2 authentication layer.
 #[derive(Debug, thiserror::Error)]
 pub enum AuthError {
+    #[cfg(feature = "client-credentials-auth")]
     #[error("token URL is invalid")]
     InvalidTokenUrl(#[source] ParseError),
     #[error("failed to request access token")]
@@ -30,6 +38,7 @@ pub enum AuthError {
 }
 
 impl AuthError {
+    #[cfg(feature = "client-credentials-auth")]
     fn request_token<E>(error: E) -> Self
     where
         E: Error + Send + Sync + 'static,
@@ -48,6 +57,7 @@ pub trait Authenticator: Send + Sync {
     async fn authorize(&self, metadata: &mut MetadataMap) -> Result<(), AuthError>;
 }
 
+#[cfg(feature = "client-credentials-auth")]
 /// Builder for a client-credentials authenticator.
 #[derive(Clone, Debug)]
 pub struct AuthenticatorBuilder {
@@ -58,6 +68,7 @@ pub struct AuthenticatorBuilder {
     token_url: String,
 }
 
+#[cfg(feature = "client-credentials-auth")]
 impl AuthenticatorBuilder {
     /// Creates a new builder for the given `OAuth2` client credentials.
     ///
@@ -118,12 +129,14 @@ impl AuthenticatorBuilder {
     }
 }
 
+#[cfg(feature = "client-credentials-auth")]
 /// `OAuth2` client-credentials authenticator for the mixi2 API.
 #[derive(Clone, Debug)]
 pub struct ClientCredentialsAuthenticator {
     inner: Arc<Inner>,
 }
 
+#[cfg(feature = "client-credentials-auth")]
 impl ClientCredentialsAuthenticator {
     /// Creates a new builder for the given `OAuth2` client credentials.
     ///
@@ -150,6 +163,7 @@ impl ClientCredentialsAuthenticator {
     }
 }
 
+#[cfg(feature = "client-credentials-auth")]
 #[async_trait]
 impl Authenticator for ClientCredentialsAuthenticator {
     async fn access_token(&self) -> Result<String, AuthError> {
@@ -173,6 +187,7 @@ impl Authenticator for ClientCredentialsAuthenticator {
     }
 }
 
+#[cfg(feature = "client-credentials-auth")]
 #[derive(Debug)]
 struct Inner {
     auth_key: Option<String>,
@@ -183,6 +198,7 @@ struct Inner {
     token_url: String,
 }
 
+#[cfg(feature = "client-credentials-auth")]
 impl Inner {
     async fn access_token(&self) -> Result<String, AuthError> {
         let mut state = self.state.lock().await;
@@ -213,12 +229,14 @@ impl Inner {
     }
 }
 
+#[cfg(feature = "client-credentials-auth")]
 #[derive(Debug, Default)]
 struct TokenState {
     access_token: Option<String>,
     buffered_expires_at: Option<Instant>,
 }
 
+#[cfg(feature = "client-credentials-auth")]
 impl TokenState {
     fn cached_token(&self) -> Option<&str> {
         match (&self.access_token, self.buffered_expires_at) {
@@ -231,7 +249,11 @@ impl TokenState {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "client-credentials-auth"))]
+#[expect(
+    clippy::tests_outside_test_module,
+    reason = "feature-gated tests live in a cfg(all(test, feature = ...)) module"
+)]
 mod tests {
     use std::{
         collections::VecDeque,

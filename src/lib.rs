@@ -46,61 +46,79 @@
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
-use std::{future::ready, sync::Arc};
+#[cfg(feature = "stream")]
+use std::future::ready;
+#[cfg(any(feature = "api", feature = "stream"))]
+use std::sync::Arc;
 
 mod auth;
 mod events;
 mod proto;
 
-use crate::{
-    auth::{AuthError as AuthLayerError, Authenticator as AuthenticatorTrait},
-    events::StreamWatcher as EventStreamWatcher,
-    proto::social::mixi::application::{
-        r#const::v1::{LanguageCode, PostPublishingType},
-        model::v1::PostMask,
-        service::{
-            application_api::v1::{
-                self as application_api_v1, AddStampToPostRequest, AddStampToPostResponse,
-                CreatePostRequest, CreatePostResponse, GetPostMediaStatusRequest,
-                GetPostMediaStatusResponse, GetPostsRequest, GetPostsResponse, GetStampsRequest,
-                GetStampsResponse, GetUsersRequest, GetUsersResponse,
-                InitiatePostMediaUploadRequest, InitiatePostMediaUploadResponse,
-                SendChatMessageRequest, SendChatMessageResponse,
-                application_service_client::ApplicationServiceClient as RawApiClient,
-            },
-            application_stream::v1::application_service_client::ApplicationServiceClient as RawStreamClient,
-        },
+use crate::proto::social::mixi::application::{
+    r#const::v1::{LanguageCode, PostPublishingType},
+    model::v1::PostMask,
+    service::application_api::v1::{
+        self as application_api_v1, AddStampToPostRequest, CreatePostRequest, GetStampsRequest,
+        InitiatePostMediaUploadRequest, SendChatMessageRequest,
     },
 };
+#[cfg(feature = "api")]
+use crate::proto::social::mixi::application::service::application_api::v1::{
+    AddStampToPostResponse, CreatePostResponse, GetPostMediaStatusRequest,
+    GetPostMediaStatusResponse, GetPostsRequest, GetPostsResponse, GetStampsResponse,
+    GetUsersRequest, GetUsersResponse, InitiatePostMediaUploadResponse,
+    SendChatMessageResponse,
+    application_service_client::ApplicationServiceClient as RawApiClient,
+};
+#[cfg(feature = "stream")]
+use crate::proto::social::mixi::application::service::application_stream::v1::application_service_client::ApplicationServiceClient as RawStreamClient;
+#[cfg(feature = "api")]
+use crate::auth::AuthError as AuthLayerError;
+#[cfg(any(feature = "api", feature = "stream"))]
+use crate::auth::Authenticator as AuthenticatorTrait;
+#[cfg(feature = "stream")]
+use crate::events::StreamWatcher as EventStreamWatcher;
 use thiserror::Error;
+#[cfg(feature = "api")]
 use tonic::{
     IntoRequest, Request, Response, Status,
     body::Body as TransportBody,
     client::GrpcService,
     codegen::{Body, Bytes as TonicBytes, StdError},
-    transport::{Channel, Endpoint, Error as TransportError},
 };
+#[cfg(any(feature = "api", feature = "stream"))]
+use tonic::transport::{Channel, Endpoint, Error as TransportError};
 
+#[cfg(feature = "api")]
 /// Official mixi2 Application API endpoint for unary SDK clients.
 ///
 /// This endpoint is used automatically when builders are created without an
 /// explicit `with_endpoint` or `with_channel` transport override.
 pub const DEFAULT_API_ENDPOINT: &str = "https://application-api.mixi.social";
 
+#[cfg(feature = "stream")]
 /// Official mixi2 Application stream endpoint for event streaming clients.
 ///
 /// This endpoint is used automatically when stream builders are created without
 /// an explicit `with_endpoint` or `with_channel` transport override.
 pub const DEFAULT_STREAM_ENDPOINT: &str = "https://application-stream.mixi.social";
 
-pub use crate::auth::{
-    AuthError, Authenticator, AuthenticatorBuilder, ClientCredentialsAuthenticator,
-    DEFAULT_TOKEN_URL,
-};
-pub use crate::events::{
-    BoxError, DispatchMode, EventHandler, StreamWatcher, StreamWatcherError, WebhookError,
-    WebhookServer, WebhookService, testutil,
-};
+pub use crate::auth::{AuthError, Authenticator};
+#[cfg(feature = "client-credentials-auth")]
+pub use crate::auth::{AuthenticatorBuilder, ClientCredentialsAuthenticator, DEFAULT_TOKEN_URL};
+#[cfg(any(feature = "stream", feature = "webhook-core", feature = "testutil"))]
+pub use crate::events::BoxError;
+#[cfg(any(feature = "stream", feature = "webhook-core", feature = "testutil"))]
+pub use crate::events::EventHandler;
+#[cfg(feature = "webhook-axum")]
+pub use crate::events::WebhookServer;
+#[cfg(feature = "testutil")]
+pub use crate::events::testutil;
+#[cfg(feature = "webhook-core")]
+pub use crate::events::{DispatchMode, WebhookError, WebhookService};
+#[cfg(feature = "stream")]
+pub use crate::events::{StreamWatcher, StreamWatcherError};
 pub use crate::proto::{FILE_DESCRIPTOR_SET, social};
 
 /// Validation errors returned by the high-level request builders.
@@ -126,6 +144,7 @@ pub enum RequestValidationError {
     UnspecifiedUploadType,
 }
 
+#[cfg(any(feature = "api", feature = "stream"))]
 /// Transport setup errors returned by the top-level builders.
 #[derive(Debug, Error)]
 pub enum ClientBuildError {
@@ -135,12 +154,14 @@ pub enum ClientBuildError {
     Transport(#[source] TransportError),
 }
 
+#[cfg(feature = "api")]
 /// Authenticated façade over the raw unary gRPC client.
 pub struct ApiClient<T> {
     authenticator: Arc<dyn AuthenticatorTrait>,
     inner: RawApiClient<T>,
 }
 
+#[cfg(feature = "api")]
 impl<T> ApiClient<T>
 where
     T: GrpcService<TransportBody> + Send + Sync,
@@ -301,6 +322,7 @@ where
     }
 }
 
+#[cfg(feature = "api")]
 /// Builder for an authenticated unary client.
 pub struct ApiClientBuilder {
     authenticator: Arc<dyn AuthenticatorTrait>,
@@ -308,6 +330,7 @@ pub struct ApiClientBuilder {
     endpoint: Option<String>,
 }
 
+#[cfg(feature = "api")]
 impl ApiClientBuilder {
     /// Creates a new builder for the given authenticator.
     #[must_use]
@@ -346,6 +369,7 @@ impl ApiClientBuilder {
     }
 }
 
+#[cfg(feature = "stream")]
 /// Builder for an authenticated stream watcher.
 pub struct StreamClientBuilder {
     authenticator: Arc<dyn AuthenticatorTrait>,
@@ -353,6 +377,7 @@ pub struct StreamClientBuilder {
     endpoint: Option<String>,
 }
 
+#[cfg(feature = "stream")]
 impl StreamClientBuilder {
     /// Creates a new builder for the given authenticator.
     #[must_use]
@@ -669,10 +694,12 @@ impl AddStampToPostRequestBuilder {
     }
 }
 
+#[cfg(feature = "api")]
 fn auth_error_to_status(error: &AuthLayerError) -> Status {
     Status::unauthenticated(error.to_string())
 }
 
+#[cfg(feature = "api")]
 async fn resolve_channel(
     channel: Option<Channel>,
     endpoint: Option<String>,
@@ -692,6 +719,7 @@ async fn resolve_channel(
     }
 }
 
+#[cfg(any(feature = "api", feature = "stream", test))]
 fn resolve_endpoint(endpoint: Option<String>, default_endpoint: &str) -> String {
     endpoint.unwrap_or_else(|| default_endpoint.to_owned())
 }
@@ -704,12 +732,17 @@ mod tests {
         service::application_api::v1::initiate_post_media_upload_request::Type as UploadType,
     };
 
+    #[cfg(feature = "api")]
+    use super::DEFAULT_API_ENDPOINT;
+    #[cfg(feature = "stream")]
+    use super::DEFAULT_STREAM_ENDPOINT;
     use super::{
-        AddStampToPostRequestBuilder, CreatePostRequestBuilder, DEFAULT_API_ENDPOINT,
-        DEFAULT_STREAM_ENDPOINT, GetStampsRequestBuilder, InitiatePostMediaUploadRequestBuilder,
-        RequestValidationError, SendChatMessageRequestBuilder, resolve_endpoint,
+        AddStampToPostRequestBuilder, CreatePostRequestBuilder, GetStampsRequestBuilder,
+        InitiatePostMediaUploadRequestBuilder, RequestValidationError,
+        SendChatMessageRequestBuilder, resolve_endpoint,
     };
 
+    #[cfg(feature = "api")]
     #[test]
     fn resolve_endpoint_defaults_to_official_api_endpoint() {
         assert_eq!(
@@ -718,6 +751,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "stream")]
     #[test]
     fn resolve_endpoint_defaults_to_official_stream_endpoint() {
         assert_eq!(
@@ -726,6 +760,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "api")]
     #[test]
     fn resolve_endpoint_prefers_explicit_override() {
         let override_endpoint = String::from("https://override.example.test");

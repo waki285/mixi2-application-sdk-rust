@@ -1,53 +1,77 @@
 //! Event handling support for the mixi2 Rust SDK.
 
+#[cfg(any(feature = "stream", feature = "webhook-core", feature = "testutil"))]
+use std::error::Error;
+#[cfg(any(feature = "stream", feature = "webhook-core", feature = "testutil"))]
+use std::sync::Arc;
+#[cfg(feature = "stream")]
+use std::time::Duration;
+#[cfg(feature = "webhook-axum")]
+use std::{io::Error as IoError, net::SocketAddr};
+#[cfg(feature = "webhook-core")]
 use std::{
-    error::Error,
-    io::Error as IoError,
-    net::SocketAddr,
     num::ParseIntError,
-    sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
-use crate::{
-    auth::{AuthError, Authenticator},
-    proto::social::mixi::application::{
-        r#const::v1::EventType,
-        model::v1::Event,
-        service::{
-            application_stream::v1::{
-                SubscribeEventsRequest, SubscribeEventsResponse,
-                application_service_client::ApplicationServiceClient,
-            },
-            client_endpoint::v1::SendEventRequest,
-        },
-    },
+#[cfg(feature = "stream")]
+use crate::auth::{AuthError, Authenticator};
+#[cfg(any(feature = "stream", feature = "webhook-axum"))]
+use crate::proto::social::mixi::application::r#const::v1::EventType;
+#[cfg(any(feature = "stream", feature = "webhook-core", feature = "testutil"))]
+use crate::proto::social::mixi::application::model::v1::Event;
+#[cfg(feature = "stream")]
+use crate::proto::social::mixi::application::service::application_stream::v1::{
+    SubscribeEventsRequest, SubscribeEventsResponse,
+    application_service_client::ApplicationServiceClient,
 };
+#[cfg(feature = "webhook-core")]
+use crate::proto::social::mixi::application::service::client_endpoint::v1::SendEventRequest;
+#[cfg(any(feature = "stream", feature = "webhook-core", feature = "testutil"))]
 use async_trait::async_trait;
+#[cfg(feature = "webhook-axum")]
 use axum::{
     Router,
     body::Bytes,
     extract::State,
-    http::{
-        HeaderMap, HeaderValue, Method, Request as HttpRequest, StatusCode, Uri,
-        header::{CONTENT_TYPE, TE},
-    },
     response::{IntoResponse, Response},
     routing::{get, post},
 };
+#[cfg(any(feature = "webhook-core", feature = "testutil"))]
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+#[cfg(feature = "stream")]
 use bytes::{Bytes as GrpcBytes, BytesMut};
+#[cfg(feature = "webhook-core")]
 use ed25519_dalek::{Signature, SignatureError, Verifier, VerifyingKey};
+#[cfg(any(feature = "stream", feature = "webhook-core"))]
+use http::HeaderMap;
+#[cfg(any(feature = "stream", feature = "webhook-axum"))]
+use http::StatusCode;
+#[cfg(feature = "stream")]
+use http::{
+    HeaderValue, Method, Request as HttpRequest, Uri,
+    header::{CONTENT_TYPE, TE},
+};
+#[cfg(feature = "stream")]
 use http_body_util::{BodyExt, Full};
+#[cfg(feature = "stream")]
 use hyper::body::Incoming;
+#[cfg(feature = "stream")]
 use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
+#[cfg(feature = "stream")]
 use hyper_util::{
     client::legacy::{Client as HttpClient, connect::HttpConnector},
     rt::TokioExecutor,
 };
+#[cfg(any(feature = "stream", feature = "webhook-core"))]
 use prost::Message;
+#[cfg(any(feature = "stream", feature = "webhook-core"))]
 use thiserror::Error;
-use tokio::{net::TcpListener, time::sleep};
+#[cfg(feature = "webhook-axum")]
+use tokio::net::TcpListener;
+#[cfg(feature = "stream")]
+use tokio::time::sleep;
+#[cfg(feature = "stream")]
 use tonic::{
     Code, Request, Status,
     body::Body as TransportBody,
@@ -55,24 +79,39 @@ use tonic::{
     codec::Streaming,
     codegen::{Body, Bytes as TonicBytes, StdError},
 };
-use tracing::{debug, error, info, warn};
+#[cfg(any(feature = "stream", feature = "webhook-axum"))]
+use tracing::error;
+#[cfg(feature = "stream")]
+use tracing::{debug, info, warn};
 
+#[cfg(feature = "webhook-axum")]
 const EVENTS_PATH: &str = "/events";
+#[cfg(feature = "webhook-axum")]
 const HEALTH_PATH: &str = "/healthz";
+#[cfg(feature = "stream")]
 const MAX_RECONNECT_ATTEMPTS: u8 = 3;
 // mixi2 stream responses can exceed the default 16 KiB HTTP/2 frame size that tonic advertises.
+#[cfg(feature = "stream")]
 const HTTP2_MAX_FRAME_SIZE: u32 = (1 << 24) - 1;
+#[cfg(feature = "stream")]
 const GRPC_FRAME_HEADER_LEN: usize = 5;
+#[cfg(feature = "stream")]
 const GRPC_ACCEPT_ENCODING_HEADER: &str = "grpc-accept-encoding";
+#[cfg(feature = "stream")]
 const GRPC_ACCEPT_ENCODING_VALUE: &str = "identity";
+#[cfg(feature = "stream")]
 const GRPC_CONTENT_TYPE: &str = "application/grpc";
+#[cfg(feature = "stream")]
 const STREAM_SUBSCRIBE_PATH: &str =
     "/social.mixi.application.service.application_stream.v1.ApplicationService/SubscribeEvents";
+#[cfg(feature = "webhook-core")]
 const TIMESTAMP_TOLERANCE_SECS: i64 = 300;
 
+#[cfg(any(feature = "stream", feature = "webhook-core", feature = "testutil"))]
 /// Boxed error type returned by event handlers.
 pub type BoxError = Box<dyn Error + Send + Sync + 'static>;
 
+#[cfg(any(feature = "stream", feature = "webhook-core", feature = "testutil"))]
 /// Async handler for mixi2 events.
 #[async_trait]
 pub trait EventHandler: Send + Sync {
@@ -80,6 +119,7 @@ pub trait EventHandler: Send + Sync {
     async fn handle(&self, event: &Event) -> Result<(), BoxError>;
 }
 
+#[cfg(feature = "webhook-core")]
 /// Controls whether webhook events are processed inline or spawned onto Tokio.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum DispatchMode {
@@ -90,6 +130,7 @@ pub enum DispatchMode {
     Inline,
 }
 
+#[cfg(feature = "webhook-core")]
 /// Errors returned before a webhook request is acknowledged.
 #[derive(Debug, Error)]
 pub enum WebhookError {
@@ -113,6 +154,7 @@ pub enum WebhookError {
     InvalidBody(#[source] prost::DecodeError),
 }
 
+#[cfg(feature = "webhook-axum")]
 impl WebhookError {
     const fn status_code(&self) -> StatusCode {
         match self {
@@ -129,12 +171,14 @@ impl WebhookError {
     }
 }
 
+#[cfg(feature = "webhook-axum")]
 impl IntoResponse for WebhookError {
     fn into_response(self) -> Response {
         (self.status_code(), self.to_string()).into_response()
     }
 }
 
+#[cfg(feature = "stream")]
 /// Errors returned by the streaming watcher.
 #[derive(Debug, Error)]
 pub enum StreamWatcherError {
@@ -146,6 +190,7 @@ pub enum StreamWatcherError {
     Reconnect(#[source] Status),
 }
 
+#[cfg(feature = "webhook-core")]
 /// Verifies and dispatches incoming webhook requests.
 pub struct WebhookService<H> {
     clock: Arc<dyn Clock>,
@@ -154,6 +199,7 @@ pub struct WebhookService<H> {
     public_key: VerifyingKey,
 }
 
+#[cfg(feature = "webhook-core")]
 impl<H> Clone for WebhookService<H> {
     fn clone(&self) -> Self {
         Self {
@@ -165,6 +211,7 @@ impl<H> Clone for WebhookService<H> {
     }
 }
 
+#[cfg(feature = "webhook-core")]
 impl<H> WebhookService<H>
 where
     H: EventHandler + 'static,
@@ -237,6 +284,7 @@ where
         Ok(request.events)
     }
 
+    #[cfg(feature = "webhook-axum")]
     /// Builds an Axum router with `/healthz` and `/events`.
     pub fn router(self) -> Router {
         Router::new()
@@ -245,6 +293,7 @@ where
             .with_state(self)
     }
 
+    #[cfg(feature = "webhook-axum")]
     async fn dispatch_events(&self, events: Vec<Event>) {
         for event in events {
             if is_ping_event(&event) {
@@ -269,6 +318,7 @@ where
         }
     }
 
+    #[cfg(feature = "webhook-axum")]
     async fn handle_http_request(&self, headers: HeaderMap, body: Bytes) -> Response {
         match self.verify_and_decode(&headers, &body) {
             Ok(events) => {
@@ -286,12 +336,14 @@ where
     }
 }
 
+#[cfg(feature = "webhook-axum")]
 /// Thin Axum server wrapper for webhook delivery.
 pub struct WebhookServer<H> {
     address: SocketAddr,
     service: WebhookService<H>,
 }
 
+#[cfg(feature = "webhook-axum")]
 impl<H> Clone for WebhookServer<H> {
     fn clone(&self) -> Self {
         Self {
@@ -301,6 +353,7 @@ impl<H> Clone for WebhookServer<H> {
     }
 }
 
+#[cfg(feature = "webhook-axum")]
 impl<H> WebhookServer<H>
 where
     H: EventHandler + 'static,
@@ -328,6 +381,7 @@ where
     }
 }
 
+#[cfg(feature = "stream")]
 /// Client abstraction used by the stream watcher.
 #[async_trait]
 pub trait SubscribeEventsClient: Send {
@@ -338,6 +392,7 @@ pub trait SubscribeEventsClient: Send {
     ) -> Result<Box<dyn SubscribeEventsStream + Send>, Status>;
 }
 
+#[cfg(feature = "stream")]
 /// Async receive abstraction for stream testing.
 #[async_trait]
 pub trait SubscribeEventsStream: Send {
@@ -345,6 +400,7 @@ pub trait SubscribeEventsStream: Send {
     async fn recv(&mut self) -> Result<Option<SubscribeEventsResponse>, Status>;
 }
 
+#[cfg(feature = "stream")]
 #[async_trait]
 impl SubscribeEventsStream for Streaming<SubscribeEventsResponse> {
     async fn recv(&mut self) -> Result<Option<SubscribeEventsResponse>, Status> {
@@ -352,6 +408,7 @@ impl SubscribeEventsStream for Streaming<SubscribeEventsResponse> {
     }
 }
 
+#[cfg(feature = "stream")]
 #[async_trait]
 impl<T> SubscribeEventsClient for ApplicationServiceClient<T>
 where
@@ -370,13 +427,16 @@ where
     }
 }
 
+#[cfg(feature = "stream")]
 type HttpStreamTransport = HttpClient<HttpsConnector<HttpConnector>, Full<GrpcBytes>>;
 
+#[cfg(feature = "stream")]
 pub struct HttpStreamClient {
     client: HttpStreamTransport,
     endpoint: Uri,
 }
 
+#[cfg(feature = "stream")]
 impl HttpStreamClient {
     fn new(endpoint: Uri) -> Self {
         let https = HttpsConnectorBuilder::new()
@@ -419,10 +479,12 @@ impl HttpStreamClient {
     }
 }
 
+#[cfg(feature = "stream")]
 pub fn http_stream_client(endpoint: Uri) -> HttpStreamClient {
     HttpStreamClient::new(endpoint)
 }
 
+#[cfg(feature = "stream")]
 #[async_trait]
 impl SubscribeEventsClient for HttpStreamClient {
     async fn subscribe_events(
@@ -471,11 +533,13 @@ impl SubscribeEventsClient for HttpStreamClient {
     }
 }
 
+#[cfg(feature = "stream")]
 struct HttpGrpcStream {
     body: Incoming,
     pending: BytesMut,
 }
 
+#[cfg(feature = "stream")]
 #[async_trait]
 impl SubscribeEventsStream for HttpGrpcStream {
     async fn recv(&mut self) -> Result<Option<SubscribeEventsResponse>, Status> {
@@ -519,12 +583,14 @@ impl SubscribeEventsStream for HttpGrpcStream {
     }
 }
 
+#[cfg(feature = "stream")]
 /// Watches the gRPC event stream and dispatches events to the provided handler.
 pub struct StreamWatcher {
     authenticator: Arc<dyn Authenticator>,
     client: Box<dyn SubscribeEventsClient>,
 }
 
+#[cfg(feature = "stream")]
 impl StreamWatcher {
     /// Creates a new stream watcher for the given client and authenticator.
     #[must_use]
@@ -630,6 +696,7 @@ impl StreamWatcher {
     }
 }
 
+#[cfg(feature = "stream")]
 fn encode_grpc_request(request: SubscribeEventsRequest) -> Result<Vec<u8>, Status> {
     let message = request.encode_to_vec();
     let message_len = u32::try_from(message.len())
@@ -641,6 +708,7 @@ fn encode_grpc_request(request: SubscribeEventsRequest) -> Result<Vec<u8>, Statu
     Ok(body)
 }
 
+#[cfg(feature = "stream")]
 fn decode_grpc_response(pending: &mut BytesMut) -> Result<Option<SubscribeEventsResponse>, Status> {
     if pending.len() < GRPC_FRAME_HEADER_LEN {
         return Ok(None);
@@ -680,6 +748,7 @@ fn decode_grpc_response(pending: &mut BytesMut) -> Result<Option<SubscribeEvents
     Ok(Some(message))
 }
 
+#[cfg(feature = "stream")]
 fn validate_grpc_status(headers: &HeaderMap) -> Result<(), Status> {
     if let Some(status) = Status::from_header_map(headers)
         && status.code() != Code::Ok
@@ -690,6 +759,7 @@ fn validate_grpc_status(headers: &HeaderMap) -> Result<(), Status> {
     Ok(())
 }
 
+#[cfg(feature = "stream")]
 fn map_http_status_without_grpc_status(status_code: StatusCode) -> Status {
     let code = match status_code {
         StatusCode::BAD_REQUEST => Code::Internal,
@@ -712,6 +782,7 @@ fn map_http_status_without_grpc_status(status_code: StatusCode) -> Status {
     )
 }
 
+#[cfg(any(feature = "testutil", all(test, feature = "webhook-core")))]
 /// Test helpers that mirror the Go SDK fixtures.
 pub mod testutil {
     use std::sync::Arc;
@@ -791,10 +862,12 @@ pub mod testutil {
     }
 }
 
+#[cfg(feature = "webhook-axum")]
 async fn healthz_handler() -> StatusCode {
     StatusCode::OK
 }
 
+#[cfg(feature = "webhook-axum")]
 async fn webhook_handler<H>(
     State(service): State<WebhookService<H>>,
     headers: HeaderMap,
@@ -806,25 +879,40 @@ where
     service.handle_http_request(headers, body).await
 }
 
+#[cfg(any(feature = "stream", feature = "webhook-axum"))]
 const fn is_ping_event(event: &Event) -> bool {
     event.event_type == EventType::Ping as i32
 }
 
+#[cfg(feature = "webhook-core")]
 trait Clock: Send + Sync {
     fn unix_timestamp(&self) -> i64;
 }
 
+#[cfg(feature = "webhook-core")]
 struct SystemClock;
 
+#[cfg(feature = "webhook-core")]
 impl Clock for SystemClock {
     fn unix_timestamp(&self) -> i64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map_or(0, |duration| duration.as_secs().cast_signed())
+            .map_or(0, |duration| {
+                i64::try_from(duration.as_secs()).unwrap_or(i64::MAX)
+            })
     }
 }
 
-#[cfg(test)]
+#[cfg(all(
+    test,
+    feature = "stream",
+    feature = "webhook-core",
+    feature = "webhook-axum"
+))]
+#[expect(
+    clippy::tests_outside_test_module,
+    reason = "feature-gated tests live in a cfg(all(test, feature = ...)) module"
+)]
 mod tests {
     use std::{
         collections::VecDeque,

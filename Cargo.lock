@@ -900,6 +900,7 @@ dependencies = [
  "dotenvy",
  "ed25519-dalek",
  "hex",
+ "http",
  "http-body-util",
  "hyper",
  "hyper-rustls",
