@@ -17,6 +17,9 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
       - name: Build examples
         run: cargo build --examples
 
@@ -27,4 +30,4 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Run clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets --all-features -- -D warnings
