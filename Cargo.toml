@@ -2,7 +2,24 @@
 name = "mixi2"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
+description = "Async Rust SDK for the mixi2 Application API."
 license = "Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/waki285/mixi2-application-sdk-rust"
+documentation = "https://docs.rs/mixi2"
+keywords = ["mixi2", "grpc", "oauth2", "webhook", "tokio"]
+categories = ["api-bindings", "asynchronous"]
+include = [
+    "src/**",
+    "examples/**",
+    "proto/vendor/**",
+    "build.rs",
+    "Cargo.toml",
+    "README.md",
+    "LICENSE",
+    ".env.example",
+]
 build = "build.rs"
 
 [package.metadata.docs.rs]
