@@ -59,13 +59,13 @@ use crate::proto::social::mixi::application::{
     r#const::v1::{LanguageCode, PostPublishingType},
     model::v1::PostMask,
     service::application_api::v1::{
-        self as application_api_v1, AddStampToPostRequest, CreatePostRequest, GetStampsRequest,
-        InitiatePostMediaUploadRequest, SendChatMessageRequest,
+        self as application_api_v1, AddStampToPostRequest, CreatePostRequest, DeletePostRequest,
+        GetStampsRequest, InitiatePostMediaUploadRequest, SendChatMessageRequest,
     },
 };
 #[cfg(feature = "api")]
 use crate::proto::social::mixi::application::service::application_api::v1::{
-    AddStampToPostResponse, CreatePostResponse, GetPostMediaStatusRequest,
+    AddStampToPostResponse, CreatePostResponse, DeletePostResponse, GetPostMediaStatusRequest,
     GetPostMediaStatusResponse, GetPostsRequest, GetPostsResponse, GetStampsResponse,
     GetUsersRequest, GetUsersResponse, InitiatePostMediaUploadResponse,
     SendChatMessageResponse,
@@ -237,6 +237,20 @@ where
     ) -> Result<Response<CreatePostResponse>, Status> {
         let request = self.authorize_request(request).await?;
         self.inner.create_post(request).await
+    }
+
+    /// Calls `DeletePost`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Status::unauthenticated` when token acquisition fails, or the RPC status
+    /// returned by the upstream server.
+    pub async fn delete_post(
+        &mut self,
+        request: impl IntoRequest<DeletePostRequest> + Send,
+    ) -> Result<Response<DeletePostResponse>, Status> {
+        let request = self.authorize_request(request).await?;
+        self.inner.delete_post(request).await
     }
 
     /// Calls `InitiatePostMediaUpload`.
@@ -513,6 +527,43 @@ impl CreatePostRequestBuilder {
     }
 }
 
+/// Builder for `DeletePostRequest`.
+#[derive(Clone, Debug)]
+pub struct DeletePostRequestBuilder {
+    request: DeletePostRequest,
+}
+
+impl DeletePostRequestBuilder {
+    /// Creates a new builder with the required post identifier.
+    #[must_use]
+    pub fn new(post_id: impl Into<String>) -> Self {
+        Self {
+            request: DeletePostRequest {
+                post_id: post_id.into(),
+            },
+        }
+    }
+
+    /// Overrides the target post identifier.
+    #[must_use]
+    pub fn post_id(mut self, post_id: impl Into<String>) -> Self {
+        self.request.post_id = post_id.into();
+        self
+    }
+
+    /// Finalizes the validated request.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `post_id` is empty.
+    pub fn build(self) -> Result<DeletePostRequest, RequestValidationError> {
+        if self.request.post_id.is_empty() {
+            return Err(RequestValidationError::EmptyPostId);
+        }
+        Ok(self.request)
+    }
+}
+
 /// Builder for `SendChatMessageRequest`.
 #[derive(Clone, Debug)]
 pub struct SendChatMessageRequestBuilder {
@@ -737,8 +788,8 @@ mod tests {
     #[cfg(feature = "stream")]
     use super::DEFAULT_STREAM_ENDPOINT;
     use super::{
-        AddStampToPostRequestBuilder, CreatePostRequestBuilder, GetStampsRequestBuilder,
-        InitiatePostMediaUploadRequestBuilder, RequestValidationError,
+        AddStampToPostRequestBuilder, CreatePostRequestBuilder, DeletePostRequestBuilder,
+        GetStampsRequestBuilder, InitiatePostMediaUploadRequestBuilder, RequestValidationError,
         SendChatMessageRequestBuilder, resolve_endpoint,
     };
 
@@ -800,6 +851,20 @@ mod tests {
             })
             .publishing_type(PostPublishingType::NotPublishing)
             .build();
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn delete_post_builder_requires_post_id() {
+        let result = DeletePostRequestBuilder::new("").build();
+
+        assert_eq!(result, Err(RequestValidationError::EmptyPostId));
+    }
+
+    #[test]
+    fn delete_post_builder_accepts_post_id() {
+        let result = DeletePostRequestBuilder::new("post-id").build();
 
         assert!(result.is_ok());
     }

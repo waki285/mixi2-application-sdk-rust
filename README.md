@@ -12,7 +12,7 @@ This repository migrates [the original Go SDK](https://github.com/mixigroup/mixi
 ## Features
 
 - Async-only API surface designed for Tokio
-- Vendored `mixigroup/mixi2-api` protobuf snapshot at `v1.0.0`
+- Vendored `mixigroup/mixi2-api` protobuf snapshot at `v1.1.0`
 - Authenticated facade covering every unary Application API RPC
 - Webhook signature verification with Ed25519 and timestamp replay protection
 - Streaming watcher with Go-compatible reconnect behavior

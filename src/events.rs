@@ -785,22 +785,26 @@ fn map_http_status_without_grpc_status(status_code: StatusCode) -> Status {
 #[cfg(any(feature = "testutil", all(test, feature = "webhook-core")))]
 /// Test helpers that mirror the Go SDK fixtures.
 pub mod testutil {
-    use std::sync::Arc;
-
     use crate::proto::social::mixi::application::model::v1::Event;
     use async_trait::async_trait;
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
     use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
-    use tokio::sync::{Mutex, mpsc};
+    #[cfg(feature = "testutil")]
+    use std::sync::Arc;
+    #[cfg(feature = "testutil")]
+    use tokio::sync::Mutex;
+    use tokio::sync::mpsc;
 
     use super::{BoxError, EventHandler};
 
+    #[cfg(feature = "testutil")]
     /// Records every handled event in memory.
     #[derive(Debug, Default)]
     pub struct MockEventHandler {
         events: Arc<Mutex<Vec<Event>>>,
     }
 
+    #[cfg(feature = "testutil")]
     impl MockEventHandler {
         /// Returns a snapshot of the recorded events.
         pub async fn events(&self) -> Vec<Event> {
@@ -808,6 +812,7 @@ pub mod testutil {
         }
     }
 
+    #[cfg(feature = "testutil")]
     #[async_trait]
     impl EventHandler for MockEventHandler {
         async fn handle(&self, event: &Event) -> Result<(), BoxError> {

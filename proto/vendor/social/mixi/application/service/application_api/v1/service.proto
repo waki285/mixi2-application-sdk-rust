@@ -111,6 +111,18 @@ message CreatePostResponse {
   model.v1.Post post = 1;
 }
 
+// ポスト削除リクエストです。
+message DeletePostRequest {
+  // 削除対象のポストIDを指定してください。
+  string post_id = 1;
+}
+
+// ポスト削除レスポンスです。
+message DeletePostResponse {
+  // ポストが削除されたかどうかを示します。
+  bool deleted = 1;
+}
+
 // text または media_id のいずれかは必須です。
 message SendChatMessageRequest {
   // 送信先ルームIDを指定してください。
@@ -166,6 +178,9 @@ service ApplicationService {
 
   // ポストを作成します（返信/引用/メディア添付等に対応）。
   rpc CreatePost(CreatePostRequest) returns (CreatePostResponse);
+
+  // 指定したポストを削除します。
+  rpc DeletePost(DeletePostRequest) returns (DeletePostResponse);
 
   // ポストやメッセージ（ルーム送信/DM）に添付するメディアのアップロードを開始し、アップロード先URLを発行します。
   rpc InitiatePostMediaUpload(InitiatePostMediaUploadRequest) returns (InitiatePostMediaUploadResponse);
