@@ -2,7 +2,7 @@
 name = "mixi2"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 description = "Async Rust SDK for the mixi2 Application API."
 license = "Apache-2.0"
 readme = "README.md"
