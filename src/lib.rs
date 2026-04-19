@@ -14,10 +14,11 @@
 //! # Quick Start
 //!
 //! ```no_run
+//! # #[cfg(all(feature = "api", feature = "client-credentials-auth"))]
 //! use std::sync::Arc;
-//!
+//! # #[cfg(all(feature = "api", feature = "client-credentials-auth"))]
 //! use mixi2::{ApiClientBuilder, ClientCredentialsAuthenticator, GetStampsRequestBuilder};
-//!
+//! # #[cfg(all(feature = "api", feature = "client-credentials-auth"))]
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     let authenticator =
@@ -31,6 +32,8 @@
 //!
 //!     Ok(())
 //! }
+//! # #[cfg(not(all(feature = "api", feature = "client-credentials-auth")))]
+//! # fn main() {}
 //! ```
 //!
 //! # Raw Protocol Types
@@ -770,7 +773,7 @@ async fn resolve_channel(
     }
 }
 
-#[cfg(any(feature = "api", feature = "stream", test))]
+#[cfg(any(feature = "api", feature = "stream"))]
 fn resolve_endpoint(endpoint: Option<String>, default_endpoint: &str) -> String {
     endpoint.unwrap_or_else(|| default_endpoint.to_owned())
 }
@@ -787,10 +790,12 @@ mod tests {
     use super::DEFAULT_API_ENDPOINT;
     #[cfg(feature = "stream")]
     use super::DEFAULT_STREAM_ENDPOINT;
+    #[cfg(any(feature = "api", feature = "stream"))]
+    use super::resolve_endpoint;
     use super::{
         AddStampToPostRequestBuilder, CreatePostRequestBuilder, DeletePostRequestBuilder,
         GetStampsRequestBuilder, InitiatePostMediaUploadRequestBuilder, RequestValidationError,
-        SendChatMessageRequestBuilder, resolve_endpoint,
+        SendChatMessageRequestBuilder,
     };
 
     #[cfg(feature = "api")]
